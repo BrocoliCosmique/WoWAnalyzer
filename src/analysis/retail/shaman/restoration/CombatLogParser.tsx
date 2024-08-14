@@ -67,6 +67,7 @@ import Guide from './Guide';
 import Riptide from './modules/talents/Riptide';
 import CallToDominance from 'parser/retail/modules/items/dragonflight/CallToDominance';
 import ManaSpring from 'analysis/retail/shaman/shared/talents/ManaSpring';
+import TWW1TierSet from './modules/tier/TWW1TierSet';
 
 class CombatLogParser extends CoreCombatLogParser {
   static specModules = {
@@ -148,6 +149,7 @@ class CombatLogParser extends CoreCombatLogParser {
 
     // Items
     callToDominance: CallToDominance,
+    tww1TierSet: TWW1TierSet,
   };
   static guide = Guide;
 }
