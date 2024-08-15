@@ -12,12 +12,14 @@ import Statistic from 'parser/ui/Statistic';
 import { formatNumber } from 'common/format';
 import ItemHealingDone from 'parser/ui/ItemHealingDone';
 import Combatants from 'parser/shared/modules/Combatants';
-import { calculateEffectiveHealing } from 'parser/core/EventCalculateLib';
+import { calculateEffectiveHealing, calculateOverhealing } from 'parser/core/EventCalculateLib';
 import RESOURCE_TYPES from 'game/RESOURCE_TYPES';
 import ItemManaGained from 'parser/ui/ItemManaGained';
 
 const TWW1_TIER_2PC_BONUS = 0.1; // 2pc bonus Tidal Waves bonus spell power : +10%
 const TWW1_TIER_4PC_MANACOST_REDUCTION = 0.08; // 4pc bonus Tidal Waves mana cost reduction : 8%
+
+const TIDAL_WAVES_BUFF_MINIMAL_ACTIVE_TIME = 100; // Minimal duration for which you must have tidal waves. Prevents it from counting a HS/HW as buffed when you cast a riptide at the end.
 
 /**
  * **Resto Shaman T32 (Nerub'Ar Palace)**
@@ -36,11 +38,14 @@ export default class TWW1TierSet extends Analyzer {
   protected combatants!: Combatants;
   has4pc: boolean;
   tidalWaves2pcBonusHealing: number = 0;
+  tidalWaves2pcOverHealing: number = 0;
   tidalWaves4pcSavedMana: number = 0;
+  tidalWavesBuffedHealNumber: number = 0;
 
   constructor(options: Options) {
     super(options);
 
+    // Activate the module only if at least 2 pieces worn and Tidal Waves talent known (it is *technically* optional)
     this.active =
       this.selectedCombatant.has2PieceByTier(TIERS.TWW1) &&
       this.selectedCombatant.hasTalent(TALENTS_SHAMAN.TIDAL_WAVES_TALENT);
@@ -57,31 +62,37 @@ export default class TWW1TierSet extends Analyzer {
   }
 
   onHeal(event: HealEvent) {
-    if (!this.selectedCombatant.hasBuff(SPELLS.TIDAL_WAVES_BUFF.id)) {
-      return;
+    const hasTw = this.selectedCombatant.hasBuff(
+      SPELLS.TIDAL_WAVES_BUFF.id,
+      event.timestamp,
+      0,
+      TIDAL_WAVES_BUFF_MINIMAL_ACTIVE_TIME,
+    );
+    if (hasTw) {
+      // If the caster is under Tidal Waves, tally the amount attributed to the 2pc bonus, accounting for overhealing
+      this.tidalWaves2pcBonusHealing += calculateEffectiveHealing(event, TWW1_TIER_2PC_BONUS);
+      this.tidalWaves2pcOverHealing += calculateOverhealing(event, TWW1_TIER_2PC_BONUS);
+      this.tidalWavesBuffedHealNumber += 1;
     }
-
-    // If the caster is under Tidal Waves, tally the amount attributed to the 2pc bonus
-    this.tidalWaves2pcBonusHealing += calculateEffectiveHealing(event, TWW1_TIER_2PC_BONUS);
   }
 
   onCast(event: CastEvent) {
-    if (!this.selectedCombatant.hasBuff(SPELLS.TIDAL_WAVES_BUFF.id)) {
+    if (!event.resourceCost) {
       return;
     }
-
-    if (this.has4pc) {
+    const hasTw = this.selectedCombatant.hasBuff(
+      SPELLS.TIDAL_WAVES_BUFF.id,
+      event.timestamp,
+      0,
+      TIDAL_WAVES_BUFF_MINIMAL_ACTIVE_TIME,
+    );
+    if (hasTw && this.has4pc) {
       if (this.selectedCombatant.hasBuff(SPELLS.INNERVATE.id)) {
         return;
       }
-
-      if (!event.resourceCost) {
-        return;
-      }
-
       // 4pc bonus reduces mana cost by 8%
-      const baseCost = event.resourceCost[RESOURCE_TYPES.MANA.id];
-      this.tidalWaves4pcSavedMana += baseCost * TWW1_TIER_4PC_MANACOST_REDUCTION;
+      this.tidalWaves4pcSavedMana +=
+        event.resourceCost[RESOURCE_TYPES.MANA.id] * TWW1_TIER_4PC_MANACOST_REDUCTION;
     }
   }
 
@@ -93,8 +104,11 @@ export default class TWW1TierSet extends Analyzer {
         category={STATISTIC_CATEGORY.ITEMS}
         tooltip={
           <>
-            <strong>{formatNumber(this.tidalWaves2pcBonusHealing)}</strong> bonus healing from{' '}
-            <SpellLink spell={TALENTS_SHAMAN.TIDAL_WAVES_TALENT} /> boost
+            {formatNumber(this.tidalWavesBuffedHealNumber)} heals were buffed by the{' '}
+            <SpellLink spell={TALENTS_SHAMAN.TIDAL_WAVES_TALENT} /> boost from the 2-piece bonus
+            <br />
+            for a total of <strong>{formatNumber(this.tidalWaves2pcBonusHealing)}</strong> bonus
+            healing ({formatNumber(this.tidalWaves2pcOverHealing)} overhealing){' '}
           </>
         }
       >
