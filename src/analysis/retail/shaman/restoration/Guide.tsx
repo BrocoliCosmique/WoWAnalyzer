@@ -18,6 +18,7 @@ export default function Guide({ modules, events, info }: GuideProps<typeof Comba
           modules.earthShield.guideSubsection}
         {info.combatant.hasTalent(talents.UNLEASH_LIFE_TALENT) &&
           modules.unleashLife.guideSubsection}
+        {modules.tidalWavesGraph.guideSubsection}
       </Section>
       <Section title="Short Cooldowns">
         {info.combatant.hasTalent(talents.CLOUDBURST_TOTEM_TALENT) &&

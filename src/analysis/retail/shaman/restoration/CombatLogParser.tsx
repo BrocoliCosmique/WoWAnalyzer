@@ -18,6 +18,8 @@ import CooldownThroughputTracker from './modules/features/CooldownThroughputTrac
 import MasteryEffectiveness from './modules/features/MasteryEffectiveness';
 import SpellUsable from './modules/features/SpellUsable';
 import TidalWaves from './modules/features/TidalWaves';
+import TidalWavesGraph from './modules/resourcetracker/TidalWavesGraph';
+import TidalWavesBuffStackTracker from './modules/resourcetracker/TidalWavesBuffStackTracker';
 // Talents
 import PrimordialWave from './modules/talents/PrimordialWave';
 import ChainHeal from './modules/spells/ChainHeal';
@@ -93,6 +95,8 @@ class CombatLogParser extends CoreCombatLogParser {
     checklist: Checklist,
     spellUsable: SpellUsable,
     earthShieldBreakdown: EarthShieldBreakdown,
+    tidalWavesGraph: TidalWavesGraph,
+    tidalWavesBuffStackTracker: TidalWavesBuffStackTracker,
 
     // Talents
     torrent: Torrent,
