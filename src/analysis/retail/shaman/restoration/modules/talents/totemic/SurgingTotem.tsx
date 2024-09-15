@@ -1,9 +1,7 @@
 import { defineMessage, Trans } from '@lingui/macro';
 import SPELLS from 'common/SPELLS';
 import TALENTS, { TALENTS_SHAMAN } from 'common/TALENTS/shaman';
-import { SpellIcon } from 'interface';
 import { SpellLink } from 'interface';
-import { TooltipElement } from 'interface';
 import { explanationAndDataSubsection } from 'interface/guide/components/ExplanationRow';
 import { RoundedPanel } from 'interface/guide/components/GuideDivs';
 import Analyzer, { Options, SELECTED_PLAYER } from 'parser/core/Analyzer';
@@ -12,13 +10,16 @@ import { ThresholdStyle, When } from 'parser/core/ParseResults';
 import Combatants from 'parser/shared/modules/Combatants';
 import CastEfficiencyBar from 'parser/ui/CastEfficiencyBar';
 import { GapHighlight } from 'parser/ui/CooldownBar';
-import StatisticBox, { STATISTIC_ORDER } from 'parser/ui/StatisticBox';
 import { GUIDE_CORE_EXPLANATION_PERCENT } from '../../../Guide';
 import { BoxRowEntry } from 'interface/guide/components/PerformanceBoxRow';
 import { didMoteExpire } from '../../../normalizers/CastLinkNormalizer';
 import { QualitativePerformance } from 'parser/ui/QualitativePerformance';
 import CastSummaryAndBreakdown from 'interface/guide/components/CastSummaryAndBreakdown';
-import { HEALING_RAIN_TARGETS } from '../../../constants';
+import { HEALING_RAIN_TARGETS, RESTORATION_COLORS } from '../../../constants';
+import STATISTIC_CATEGORY from 'parser/ui/STATISTIC_CATEGORY';
+import Statistic from 'parser/ui/Statistic';
+import StatisticGroup from 'parser/ui/StatisticGroup';
+import DonutChart from 'parser/ui/DonutChart';
 
 // 50 was too low, 100 was too high
 // had no issues with 85ms
@@ -50,6 +51,7 @@ class SurgingTotem extends Analyzer {
   maxTargets = HEALING_RAIN_TARGETS;
   totalMaxTargets = 0;
   casts = 0;
+  healing = 0;
 
   //SurgingTotemCasts: Cast[] = [];
   SurgingTotemCasts: SurgingTotemCast[] = [];
@@ -74,7 +76,7 @@ class SurgingTotem extends Analyzer {
     const whirlingMotes = [SPELLS.WHIRLING_AIR, SPELLS.WHIRLING_EARTH, SPELLS.WHIRLING_WATER];
 
     this.addEventListener(
-      Events.heal.by(SELECTED_PLAYER).spell(SPELLS.HEALING_RAIN_TOTEMIC),
+      Events.heal.by(SELECTED_PLAYER).spell(SPELLS.HEALING_RAIN_HEAL),
       this.onHealingRainHeal,
     );
     this.addEventListener(Events.cast.by(SELECTED_PLAYER), this._onCast);
@@ -176,7 +178,7 @@ class SurgingTotem extends Analyzer {
       });
     }
 
-    if (spellId === SPELLS.HEALING_RAIN_TOTEMIC.id) {
+    if (spellId === SPELLS.HEALING_RAIN_HEAL.id) {
       this.totalMaxTargets += HEALING_RAIN_TARGETS;
       this.casts += 1;
       this.maxTargets = HEALING_RAIN_TARGETS;
@@ -206,6 +208,14 @@ class SurgingTotem extends Analyzer {
           break;
       }
     }
+  }
+
+  get SurgingTotemUptime() {
+    return Object.values(this.combatants.players).reduce(
+      (uptime, player) =>
+        uptime + player.getBuffUptime(SPELLS.SURGING_TOTEM.id, this.owner.playerId),
+      0,
+    );
   }
 
   /** Guide subsection describing the proper usage of Surging Totem */
@@ -278,34 +288,139 @@ class SurgingTotem extends Analyzer {
     );
   }
 
-  statistic() {
-    if (isNaN(this.averageHitsPerTick)) {
-      return false;
+  get surgingTotemHealingChart() {
+    const items = [
+      {
+        color: RESTORATION_COLORS.HEALING_SURGE,
+        label: <SpellLink spell={TALENTS.PULSE_CAPACITOR_TALENT} icon={false} />,
+        spellId: TALENTS.PULSE_CAPACITOR_TALENT.id,
+        value: 20,
+      },
+      {
+        color: RESTORATION_COLORS.CHAIN_HEAL,
+        label: <SpellLink spell={TALENTS.WHIRLING_ELEMENTS_TALENT} icon={false} />,
+        spellId: TALENTS.WHIRLING_ELEMENTS_TALENT.id,
+        value: 30,
+      },
+    ];
+    if (this.selectedCombatant.hasTalent(TALENTS.OVERSURGE_TALENT)) {
+      items.push({
+        color: RESTORATION_COLORS.HEALING_WAVE,
+        label: <SpellLink spell={TALENTS.OVERSURGE_TALENT} icon={false} />,
+        spellId: TALENTS.OVERSURGE_TALENT.id,
+        value: 10,
+      });
     }
+    if (this.selectedCombatant.hasTalent(TALENTS.AMPLIFICATION_CORE_TALENT)) {
+      items.push({
+        color: RESTORATION_COLORS.HEALING_WAVE,
+        label: <SpellLink spell={TALENTS.AMPLIFICATION_CORE_TALENT} icon={false} />,
+        spellId: TALENTS.AMPLIFICATION_CORE_TALENT.id,
+        value: 10,
+      });
+    }
+    /*
+      const items = [
+        {
+          color: 'red',
+          label: 'Crit',
+          //spellId: 463095,
+          value: 396,
+        },
+        {
+          color: 'orange',
+          label: 'Haste',
+          //spellId: 463095,
+          value: 521,
+        },
+        {
+          color: 'navy',
+          label: 'Mastery',
+          //spellId: 463095,
+          value: 327,
+        },
+        {
+          color: 'teal',
+          label: 'Vers',
+          //spellId: 463095,
+          value: 328,
+        },
+      ];*/
 
+    return <DonutChart items={items} />;
+  }
+
+  statistic() {
     return (
-      <StatisticBox
-        icon={<SpellIcon spell={SPELLS.HEALING_RAIN_HEAL} />}
-        value={`${this.averageHitsPerTick.toFixed(2)}`}
-        position={STATISTIC_ORDER.OPTIONAL()}
-        label={
-          <TooltipElement
-            content={
-              <Trans id="shaman.restoration.healingRainTotemic.averageTargets.label.tooltip">
-                The average number of targets healed by Healing Rain out of the maximum amount of{' '}
-                {HEALING_RAIN_TARGETS}
-                targets.
+      <StatisticGroup
+        category={STATISTIC_CATEGORY.HERO_TALENTS}
+        large={false}
+        wide={false}
+        style={{}}
+      >
+        <Statistic ultrawide size="flexible">
+          <div className="pad">
+            <label>
+              <Trans id="shaman.restoration.castBehaviour.statistic.surgingTotem">
+                <SpellLink spell={SPELLS.SURGING_TOTEM} />
+                -related talents breakdown
               </Trans>
-            }
-          >
-            <Trans id="shaman.restoration.healingRainTotemic.averageTargets.label">
-              Average Healing Rain Targets
-            </Trans>
-          </TooltipElement>
-        }
-      />
+            </label>
+            {this.surgingTotemHealingChart}
+          </div>
+        </Statistic>
+        {/*<Statistic ultrawide>
+            <div className="pad">
+              <label>
+                <Trans id="shaman.restoration.castBehaviour.statistic.fillers">Fillers</Trans>
+              </label>
+              {this.fillerCastRatioChart}
+            </div>
+          </Statistic>*/}
+      </StatisticGroup>
     );
   }
+
+  /* return (
+     <StatisticBox
+       icon={<SpellIcon spell={SPELLS.HEALING_RAIN_HEAL} />}
+       value={`${this.averageHitsPerTick.toFixed(2)}`}
+       position={STATISTIC_ORDER.OPTIONAL()}
+       label={
+         <TooltipElement
+           content={
+             <Trans id="shaman.restoration.healingRainTotemic.averageTargets.label.tooltip">
+               The average number of targets healed by Healing Rain out of the maximum amount of{' '}
+               {HEALING_RAIN_TARGETS}
+               targets.
+             </Trans>
+           }
+         >
+           <Trans id="shaman.restoration.healingRainTotemic.averageTargets.label">
+             Average Healing Rain Targets
+           </Trans>
+         </TooltipElement>
+       }
+     />
+   );*/ /*
+
+    return (
+      <Statistic
+        size="flexible"
+        category={STATISTIC_CATEGORY.HERO_TALENTS}
+        position={STATISTIC_ORDER.OPTIONAL(45)}
+      >
+        <BoringValue label={<SpellLink spell={SPELLS.SURGING_TOTEM} />}>
+          <div>
+            <UptimeIcon /> {formatPercentage(this.SurgingTotemUptime)}% <small>uptime</small>
+            <br />
+            <ItemHealingDone amount={this.healing} />
+          </div>
+        </BoringValue>
+      </Statistic>
+    );
+  }*/
+
   //<PerformanceBoxRow values={this.castEntries} />
   guideCastBreakdown() {
     return (
