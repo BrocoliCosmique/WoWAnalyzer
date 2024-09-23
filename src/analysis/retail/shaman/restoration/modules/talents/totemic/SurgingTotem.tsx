@@ -5,7 +5,13 @@ import { SpellLink } from 'interface';
 import { explanationAndDataSubsection } from 'interface/guide/components/ExplanationRow';
 import { RoundedPanel } from 'interface/guide/components/GuideDivs';
 import Analyzer, { Options, SELECTED_PLAYER } from 'parser/core/Analyzer';
-import Events, { HealEvent, CastEvent, RemoveBuffEvent } from 'parser/core/Events';
+import Events, {
+  HealEvent,
+  CastEvent,
+  RemoveBuffEvent,
+  EventType,
+  ApplyBuffEvent,
+} from 'parser/core/Events';
 import { ThresholdStyle, When } from 'parser/core/ParseResults';
 import Combatants from 'parser/shared/modules/Combatants';
 import CastEfficiencyBar from 'parser/ui/CastEfficiencyBar';
@@ -20,6 +26,8 @@ import STATISTIC_CATEGORY from 'parser/ui/STATISTIC_CATEGORY';
 import Statistic from 'parser/ui/Statistic';
 import StatisticGroup from 'parser/ui/StatisticGroup';
 import DonutChart from 'parser/ui/DonutChart';
+import { calculateEffectiveHealing } from 'parser/core/EventCalculateLib';
+import EventEmitter from 'parser/core/modules/EventEmitter';
 
 // 50 was too low, 100 was too high
 // had no issues with 85ms
@@ -27,6 +35,8 @@ const BUFFER_MS = 85;
 const WHIRLING_AIR_ID = SPELLS.WHIRLING_AIR.id;
 const WHIRLING_EARTH_ID = SPELLS.WHIRLING_EARTH.id;
 const WHIRLING_WATER_ID = SPELLS.WHIRLING_WATER.id;
+const PULSE_CAPACITOR_INCREASE = 0.25;
+const SURGING_TOTEM_INCREASE = 0.3;
 
 interface HealingRainTickInfo {
   timestamp: number;
@@ -42,6 +52,7 @@ type SurgingTotemCast = {
 
 class SurgingTotem extends Analyzer {
   static dependencies = {
+    eventEmitter: EventEmitter,
     combatants: Combatants,
   };
 
@@ -51,7 +62,11 @@ class SurgingTotem extends Analyzer {
   maxTargets = HEALING_RAIN_TARGETS;
   totalMaxTargets = 0;
   casts = 0;
-  healing = 0;
+  baseHealingRainHealing = 0;
+  totemicHRIncrease = 0;
+  pulseCapacitorHealing = 0;
+  surgingTotemActive = false;
+  protected eventEmitter!: EventEmitter;
 
   //SurgingTotemCasts: Cast[] = [];
   SurgingTotemCasts: SurgingTotemCast[] = [];
@@ -164,6 +179,63 @@ class SurgingTotem extends Analyzer {
       // dirty fix for partial ticks happening at the same time as a real tick
       healingRainTick.hits = Math.min(this.maxTargets, healingRainTick.hits + 1);
     }
+
+    // Compute total ADDITIVE factor of percent increase, for relative importance of each factor
+    const additiveIncrease = this.selectedCombatant.hasTalent(TALENTS.SURGING_TOTEM_TALENT)
+      ? SURGING_TOTEM_INCREASE
+      : 0;
+    Number(this.selectedCombatant.hasTalent(TALENTS.PULSE_CAPACITOR_TALENT)
+        ? PULSE_CAPACITOR_INCREASE
+        : 0);
+
+    // Compute total multiplicative factor of percent increases in the hero tree, used for effective healing
+    const multiplicativeIncrease =
+      (this.selectedCombatant.hasTalent(TALENTS.PULSE_CAPACITOR_TALENT)
+        ? 1 + PULSE_CAPACITOR_INCREASE
+        : 1) *
+        (this.selectedCombatant.hasTalent(TALENTS.SURGING_TOTEM_TALENT)
+          ? 1 + SURGING_TOTEM_INCREASE
+          : 1) *
+        1 -
+      1;
+
+    const pulseCapacitorIncrease =
+      ((this.selectedCombatant.hasTalent(TALENTS.PULSE_CAPACITOR_TALENT)
+        ? PULSE_CAPACITOR_INCREASE
+        : 0) *
+        multiplicativeIncrease) /
+      additiveIncrease;
+    const surgingTotemIncrease =
+      ((this.selectedCombatant.hasTalent(TALENTS.SURGING_TOTEM_TALENT)
+        ? SURGING_TOTEM_INCREASE
+        : 0) *
+        multiplicativeIncrease) /
+      additiveIncrease;
+
+    console.log('cyril', 'pulseCapacitorIncrease', pulseCapacitorIncrease);
+    console.log('cyril', 'surgingTotemIncrease', surgingTotemIncrease);
+
+    console.log('cyril', 'multiplicativeIncrease', multiplicativeIncrease);
+    console.log('cyril', 'additiveIncrease', additiveIncrease);
+
+    console.log('cyril', 'event.amount', event.amount);
+
+    const pulseCapacitorHealing = Math.max(
+      calculateEffectiveHealing(event, pulseCapacitorIncrease),
+      0,
+    );
+    console.log('cyril', 'pulseCapacitorHealing', pulseCapacitorHealing);
+    this.pulseCapacitorHealing += pulseCapacitorHealing;
+
+    const totemicHRIncrease = Math.max(calculateEffectiveHealing(event, surgingTotemIncrease), 0);
+    console.log('cyril', 'totemicHRIncrease', totemicHRIncrease);
+    this.totemicHRIncrease += totemicHRIncrease;
+
+    this.baseHealingRainHealing += event.amount - pulseCapacitorHealing - totemicHRIncrease;
+    this.baseHealingRainHealing += event.amount - pulseCapacitorHealing - totemicHRIncrease;
+
+    //console.log('cyril pulseCapacitorHealing', event.amount, this.pulseCapacitorHealing);
+    //console.log('cyril baseHealingRainHealing', event.amount, this.baseHealingRainHealing);
   }
 
   _onCast(event: CastEvent) {
@@ -176,6 +248,11 @@ class SurgingTotem extends Analyzer {
         WHIRLING_EARTH_ID: 0,
         WHIRLING_WATER_ID: 0,
       });
+
+      const duration = 24000;
+      this._createFabricatedEvent(event, EventType.ApplyBuff, event.timestamp);
+      this._createFabricatedEvent(event, EventType.RemoveBuff, event.timestamp + duration);
+      this.surgingTotemActive = true;
     }
 
     if (spellId === SPELLS.HEALING_RAIN_HEAL.id) {
@@ -208,6 +285,27 @@ class SurgingTotem extends Analyzer {
           break;
       }
     }
+  }
+
+  _createFabricatedEvent(
+    event: CastEvent | HealEvent,
+    type: EventType.ApplyBuff | EventType.RemoveBuff,
+    timestamp: number,
+  ) {
+    const fabricatedEvent: ApplyBuffEvent | RemoveBuffEvent = {
+      ability: {
+        ...event.ability,
+        guid: SPELLS.SURGING_TOTEM.id,
+      },
+      sourceID: event.sourceID,
+      targetID: event.sourceID,
+      sourceIsFriendly: event.sourceIsFriendly,
+      targetIsFriendly: event.targetIsFriendly,
+      timestamp: timestamp,
+      type: type,
+    };
+
+    this.eventEmitter.fabricateEvent(fabricatedEvent, event);
   }
 
   get SurgingTotemUptime() {
@@ -291,16 +389,24 @@ class SurgingTotem extends Analyzer {
   get surgingTotemHealingChart() {
     const items = [
       {
-        color: RESTORATION_COLORS.HEALING_SURGE,
-        label: <SpellLink spell={TALENTS.PULSE_CAPACITOR_TALENT} icon={false} />,
-        spellId: TALENTS.PULSE_CAPACITOR_TALENT.id,
-        value: 20,
+        color: RESTORATION_COLORS.HEALING_RAIN,
+        label: <SpellLink spell={TALENTS.HEALING_RAIN_TALENT} icon={false} />,
+        spellId: TALENTS.HEALING_RAIN_TALENT.id,
+        value: this.baseHealingRainHealing,
+        tooltip: 'Healing rain baseline',
       },
       {
-        color: RESTORATION_COLORS.CHAIN_HEAL,
+        color: 'white', //RESTORATION_COLORS.HEALING_RAIN,
+        label: <SpellLink spell={SPELLS.SURGING_TOTEM} icon={false} />,
+        spellId: TALENTS.SURGING_TOTEM_TALENT.id,
+        value: this.totemicHRIncrease,
+        tooltip: 'Totemic bonus 30% healing',
+      },
+      {
+        color: 'orange', //RESTORATION_COLORS.CHAIN_HEAL,
         label: <SpellLink spell={TALENTS.WHIRLING_ELEMENTS_TALENT} icon={false} />,
         spellId: TALENTS.WHIRLING_ELEMENTS_TALENT.id,
-        value: 30,
+        value: 300000,
       },
     ];
     if (this.selectedCombatant.hasTalent(TALENTS.OVERSURGE_TALENT)) {
@@ -319,33 +425,14 @@ class SurgingTotem extends Analyzer {
         value: 10,
       });
     }
-    /*
-      const items = [
-        {
-          color: 'red',
-          label: 'Crit',
-          //spellId: 463095,
-          value: 396,
-        },
-        {
-          color: 'orange',
-          label: 'Haste',
-          //spellId: 463095,
-          value: 521,
-        },
-        {
-          color: 'navy',
-          label: 'Mastery',
-          //spellId: 463095,
-          value: 327,
-        },
-        {
-          color: 'teal',
-          label: 'Vers',
-          //spellId: 463095,
-          value: 328,
-        },
-      ];*/
+    if (this.selectedCombatant.hasTalent(TALENTS.PULSE_CAPACITOR_TALENT)) {
+      items.push({
+        color: 'red', //RESTORATION_COLORS.HEALING_SURGE,
+        label: <SpellLink spell={TALENTS.PULSE_CAPACITOR_TALENT} icon={false} />,
+        spellId: TALENTS.PULSE_CAPACITOR_TALENT.id,
+        value: this.pulseCapacitorHealing,
+      });
+    }
 
     return <DonutChart items={items} />;
   }
@@ -363,65 +450,16 @@ class SurgingTotem extends Analyzer {
             <label>
               <Trans id="shaman.restoration.castBehaviour.statistic.surgingTotem">
                 <SpellLink spell={SPELLS.SURGING_TOTEM} />
-                -related talents breakdown
+                -related choice node talents breakdown
               </Trans>
             </label>
             {this.surgingTotemHealingChart}
           </div>
         </Statistic>
-        {/*<Statistic ultrawide>
-            <div className="pad">
-              <label>
-                <Trans id="shaman.restoration.castBehaviour.statistic.fillers">Fillers</Trans>
-              </label>
-              {this.fillerCastRatioChart}
-            </div>
-          </Statistic>*/}
       </StatisticGroup>
     );
   }
 
-  /* return (
-     <StatisticBox
-       icon={<SpellIcon spell={SPELLS.HEALING_RAIN_HEAL} />}
-       value={`${this.averageHitsPerTick.toFixed(2)}`}
-       position={STATISTIC_ORDER.OPTIONAL()}
-       label={
-         <TooltipElement
-           content={
-             <Trans id="shaman.restoration.healingRainTotemic.averageTargets.label.tooltip">
-               The average number of targets healed by Healing Rain out of the maximum amount of{' '}
-               {HEALING_RAIN_TARGETS}
-               targets.
-             </Trans>
-           }
-         >
-           <Trans id="shaman.restoration.healingRainTotemic.averageTargets.label">
-             Average Healing Rain Targets
-           </Trans>
-         </TooltipElement>
-       }
-     />
-   );*/ /*
-
-    return (
-      <Statistic
-        size="flexible"
-        category={STATISTIC_CATEGORY.HERO_TALENTS}
-        position={STATISTIC_ORDER.OPTIONAL(45)}
-      >
-        <BoringValue label={<SpellLink spell={SPELLS.SURGING_TOTEM} />}>
-          <div>
-            <UptimeIcon /> {formatPercentage(this.SurgingTotemUptime)}% <small>uptime</small>
-            <br />
-            <ItemHealingDone amount={this.healing} />
-          </div>
-        </BoringValue>
-      </Statistic>
-    );
-  }*/
-
-  //<PerformanceBoxRow values={this.castEntries} />
   guideCastBreakdown() {
     return (
       <>
